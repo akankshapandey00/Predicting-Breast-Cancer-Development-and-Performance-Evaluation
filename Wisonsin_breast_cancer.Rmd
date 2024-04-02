@@ -1,0 +1,175 @@
+---
+author: "Akanksha Pandey"
+date: "2023-10-03"
+output: pdf_document
+---
+
+
+
+```{r}
+library("dplyr")
+library("ggplot2")
+library("class")
+library("lubridate")
+```
+
+
+## 1 / Predicting Breast Cancer
+```{r Load_Data, echo=F, warning=FALSE}
+data <- read.csv("/Users/a/Documents/Wisonsin_breast_cancer_data.csv")
+#str(data)
+#dim(data)
+#summary(data)
+#dropping ID 
+data <- data[-1]
+```
+
+### 1.1 / Analysis of Data Distribution
+```{r Plot_hist, echo=F, warning=FALSE}
+# Plot histogram with overlaid normal curve
+data %>%
+  ggplot(aes(x=radius_mean)) + 
+  geom_histogram(aes(y=..density..), bins=30, fill="blue", alpha=0.6) +
+  stat_function(fun=dnorm, args=list(mean=mean(data$radius_mean, na.rm=TRUE), 
+                                     sd=sd(data$radius_mean, na.rm=TRUE)), 
+                color="black", size=1) +
+  labs(title="Histogram of radius_mean with Normal Curve", 
+       x="radius_mean", 
+       y="Density") +
+  theme_minimal()
+
+```
+Is the data reasonably normally distributed?
+While the data exhibits some characteristics of a normal distribution, especially around the mean, it is not perfectly normal. The slight right-skew indicates that there are more extreme higher values than expected in a perfect normal distribution.
+
+Is it skewed?
+Yes, the data is slightly right-skewed.
+
+Why does it matter?
+The assumption of normality is important in many statistical tests and methods. If the data is not normally distributed, it can affect the validity of these tests and methods. For example, in regression analysis, the residuals (errors) are often assumed to be normally distributed. If they are not, it can lead to incorrect inferences. Additionally, understanding the distribution of the data can help in identifying outliers, making predictions, and informing the choice of statistical methods to use.
+
+```{r Shapiro_test, echo=F}
+shapiro.test(data$radius_mean)
+
+```
+The p-value is extremely small (much less than the common significance level of 0.05). Therefore, we reject the null hypothesis and conclude that the data for radius_mean does not follow a normal distribution.
+
+This result aligns with our visual observation from the histogram where we noticed the data was slightly right-skewed and not perfectly normal.
+
+### 1.2 / Identification of Outliers
+```{r Outliers, warning=FALSE}
+# Calculate Z-scores for all numeric columns
+z_scores <- scale(data %>% select(-diagnosis))
+
+# Identify outliers for each column (threshold set to 2.5)
+outliers <- apply(z_scores, 2, function(column) {
+  return(which(abs(column) > 2.5))
+})
+outliers
+
+```
+
+The outliers for each column are printed above 
+What to do with outliers?
+The strategy for handling outliers depends on the nature of the data and the goals of the analysis. Here are a few potential strategies:
+1. Removal: If the outliers represent errors or irrelevant data points, they can be removed.
+2. Transformation: Applying transformations (e.g., log transformation) can sometimes reduce the impact of outliers.
+3. Imputation: Replace outliers with statistical measures like mean, median, or mode.
+4. Binning: Group data into bins so outliers fall into the top or bottom bins.
+5. Model Choice: Use robust models that are less sensitive to outliers (e.g., tree-based models).
+In this case, given that the data represents medical measurements, outliers might be genuine extreme cases rather than errors. Depending on the goal of the analysis, one might decide to keep the outliers or address them using one of the mentioned strategies.
+
+We identified the outliers using a Z-score deviation approach, i.e., consider any values that are more than 2.5 standard deviations from the mean as outliers. For each column, calculate the mean (µ) and the standard deviation. Then for each value xi in a column, calculate |µ - xi| / standard deviation. So, for each value you are calculating the distance from the mean in terms of standard deviations. This value is called the z-score for xi. Any value above some threshold (2.5 for this question) means that the value is far from the mean and is considered an outlier.
+
+
+### 1.3 / Data Preparation
+```{r z_score_normalize, warning=FALSE}
+# Find absolute value of z-score for each value in each column
+normalize <- function(column) {
+  return ((column - mean(column)) / sd(column))
+}
+
+data_normalized <- as.data.frame(lapply(data %>% select(-diagnosis), normalize))
+data_normalized <- cbind.data.frame(data_normalized, diagnosis = data$diagnosis)
+
+```
+
+Normalization, specifically Z-score standardization, is the process of converting each feature to have a mean of 0 and a standard deviation of 1. This ensures that all features contribute equally to the computation of distances in algorithms like k-nearest neighbors (kNN) or clustering, and they have similar influence in algorithms like linear regression.
+
+In the above code I am using a custom function called normalize to perform Z-score standardization for each column in the dataset (excluding the 'diagnosis' column). The function takes a column as input, subtracts the mean of that column from each value, and then divides by the standard deviation of that column.Subsequently, the lapply function applies this normalize function to each of the numeric columns in the dataset. Finally, the 'diagnosis' column is added back to the standardized dataset.
+
+Normalization necessary because:
+1. Equal Influence: Ensures all features have an equal influence on the outcome of algorithms.
+2. Algorithm Convergence: Helps gradient descent converge more quickly.
+3. Distance-based Algorithms: For algorithms that rely on distance computations, features on larger scales can unduly influence the outcome.
+
+### 1.4 / Sampling Training and Validation Data
+```{r Splitting_data, warning=FALSE, message=FALSE}
+# Randomize (shuffle) the data
+shuffled_data = data_normalized[sample(1:nrow(data_normalized)), ]
+
+# Split the data based on the "Diagnosis" column
+validation_data <- shuffled_data %>% 
+  group_by(diagnosis) %>% 
+  sample_frac(0.20)
+
+# Creating training set
+training_data <- anti_join(shuffled_data, validation_data)
+training_data <- training_data[-31]
+
+
+```
+
+### 1.5 / Predictive Modeling
+```{r Knn}
+medians <- sapply(training_data[sapply(training_data, is.numeric)], median, na.rm = TRUE)
+
+# New data point
+new_data <- data.frame(
+  Radius_mean = 14.5, Texture_mean = 17.0, Perimeter_mean = 87.5, 
+  Area_mean = 561.3, Smoothness_mean = 0.098, Compactness_mean = 0.105,
+  Concavity_mean = 0.085, Concave_points_mean = 0.050, Symmetry_mean = 0.180,
+  Fractal_dimension_mean = 0.065, Radius_se = 0.351, Texture_se = 1.015,
+  Perimeter_se = 2.457, Area_se = 26.15, Smoothness_se = 0.005, Compactness_se = 0.022,
+  Concavity_se = 0.036, Concave_points_se = 0.013, Symmetry_se = 0.030,
+  Fractal_dimension_se = 0.005, Radius_worst = 16.5, Texture_worst = 25.3,
+  Perimeter_worst = 114.8, Area_worst = 733.5, Smoothness_worst = 0.155,
+  Compactness_worst = 0.220, Concavity_worst = NA, Concave_points_worst = NA,
+  Symmetry_worst = 0.360, Fractal_dimension_worst = 0.110
+)
+
+# Impute missing values
+missing_cols <- which(is.na(new_data))
+for (col in missing_cols) {
+  new_data[1, col] <- median(training_data[[col]], na.rm = TRUE)
+}
+
+train_data <- training_data[-31]
+# Standardize the Data
+new_data_normalized <- as.data.frame(lapply(1:ncol(new_data), function(column) {
+  return ((new_data[[column]] - mean(train_data[[column]])) / sd(train_data[[column]]))
+}))
+
+
+train_data <- training_data[-31]
+
+# Predict using k-NN
+predicted_diagnosis <- knn(train = train_data, test = new_data_normalized, cl = training_data$diagnosis, k=5)
+predicted_diagnosis
+```
+### 1.6 / Model Accuracy
+```{r Accuracy_plot, echo = FALSE}
+k_values <- 2:10
+accuracy_values <- numeric(length(k_values))
+
+for (i in 1:length(k_values)) {
+  predictions <- knn(train = train_data, test = new_data_normalized, cl = training_data$diagnosis, k   = k_values[i])
+  accuracy_values[i] <- sum(predictions == validation_data$diagnosis) / nrow(validation_data)
+}
+
+# Plotting k vs accuracy
+plot(k_values, accuracy_values, type = "b", xlab = "k", ylab = "Accuracy", main = "k vs Accuracy for kNN")
+
+```
+From the above graph we4 can see that the accuracy is not significantly affected by the k values
+
